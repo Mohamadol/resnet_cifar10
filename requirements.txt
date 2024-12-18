@@ -1,0 +1,4 @@
+matplotlib
+tensorflow-addons
+tensorflow-model-optimization
+tensorflow-probability
