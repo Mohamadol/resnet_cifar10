@@ -1,6 +1,7 @@
 import tensorflow as tf
 import tensorflow_addons as tfa
 import numpy as np
+from PIL import Image
 
 
 def c10(
@@ -53,3 +54,56 @@ def c10(
     test_dataset = test_dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
     return train_dataset, val_dataset, test_dataset
+
+
+def save_image_int(image, filename, scaling_factor=12):
+    """
+    Saves an image tensor (or batch tensor) to a file in integer format.
+
+    :param image: NumPy array of the image or batch tensor.
+    :param filename: File name to save the image.
+    :param scaling_factor: Factor to scale the image values.
+    """
+    with open(filename, "w") as file:
+        for x in np.nditer(image, order="C"):
+            file.write(str(int(x * (1 << scaling_factor))) + " ")
+        file.write("\n")
+
+
+def save_tensors(tensor, filename_prefix, single_images=False):
+    """
+    Saves tensors to files in integer format.
+
+    :param tensor: Tensor to save.
+    :param filename_prefix: Prefix for the file names.
+    :param single_images: Whether to save each image as a separate file.
+    """
+    if single_images:
+        for idx in range(tensor.shape[0]):
+            save_image_int(tensor[idx], f"{filename_prefix}{idx + 1}_scale12.inp")
+    else:
+        save_image_int(tensor, f"{filename_prefix}_scale12.inp")
+
+
+def main():
+    _, _, testData = c10(batch_size=16)
+
+    for images_batch, _ in testData.take(1):  # Take one batch
+        images_tensor = images_batch.numpy()
+
+        # Split tensors
+        imagesBatch8_1 = images_tensor[:8]
+        imagesBatch8_2 = images_tensor[8:]
+        imagesBatch16 = images_tensor
+
+        print("Saving tensors to files...")
+        save_tensors(imagesBatch8_1, "resnet50_inpBatch8_1")
+        save_tensors(imagesBatch8_2, "resnet50_inpBatch8_2")
+        save_tensors(imagesBatch16, "resnet50_inpBatch16")
+        save_tensors(images_tensor, "resnet50_inp", single_images=True)
+
+        print("All tensors saved successfully!")
+
+
+if __name__ == "__main__":
+    main()
