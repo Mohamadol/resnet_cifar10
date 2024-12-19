@@ -3,12 +3,20 @@ from tensorflow.keras.callbacks import LearningRateScheduler, ModelCheckpoint
 from source.data import c10
 from source.res18 import resnet18
 from source.utils import LRScheduleTriangle, LRScheduleCosineAnnealing
-from source.pruning import MagnitudePruning
+from source.pruning import (
+    MagnitudePruning,
+    print_conv2d_sparsity,
+    print_model_architecture,
+    print_trainable_layers,
+)
+
+pretrainedModel = "models/pruned_93.h5"
 
 flags = {
     "train": False,
     "test": True,
-    "prune": True,
+    "prune": False,
+    "stats": True,
 }
 
 trainInfo = {
@@ -21,16 +29,15 @@ trainInfo = {
     "path": "models/dense.h5",
 }
 
-
 pruningInfo = {
-    "targetRatio": 0.9,
-    "initSparsity": 0.0,
+    "targetRatio": 0.95,
+    "initSparsity": 0.90,
     "epochs": 150,
-    "epochsWarmup": 0,
+    "epochsWarmup": 6,
     "batchSize": 128,
     "lrInit": 1e-3,
-    "lrEnd": 1e-7,
-    "lrPatience": 5,
+    "lrEnd": 1e-8,
+    "lrPatience": 6,
     "path": "models",
 }
 
@@ -114,6 +121,8 @@ def pruneModel(model, trainData, validData, testData):
         loss="categorical_crossentropy",
         metrics=["accuracy"],
     )
+    _, dense_accuracy = model.evaluate(validData, verbose=0)
+    print(f"Dense model validation accuracy: {dense_accuracy:.4f}")
 
     # Warm-up phase
     print("Starting warm-up phase for 6 epochs with a very low learning rate.")
@@ -126,9 +135,6 @@ def pruneModel(model, trainData, validData, testData):
     )
 
     # Pruning phase
-    _, dense_accuracy = model.evaluate(validData, verbose=0)
-    print(f"Dense model validation accuracy: {dense_accuracy:.4f}")
-
     tf.keras.backend.set_value(model.optimizer.learning_rate, pruningInfo["lrInit"])
     pruning_callback = MagnitudePruning(
         model=model,
@@ -153,19 +159,32 @@ def pruneModel(model, trainData, validData, testData):
 
 
 def main():
-    train_dataset, val_dataset, test_dataset = c10()
+    train_dataset, val_dataset, test_dataset = c10(
+        augment=(flags["train"] == True),
+        valid_split=(flags["train"] == True),
+    )
     res18 = resnet18()
 
     if flags["train"]:
         trainModel(res18, train_dataset, val_dataset)
     else:
-        res18.load_weights(trainInfo["path"])
+        res18.load_weights(pretrainedModel)
 
     if flags["test"]:
         testModel(res18, test_dataset)
 
     if flags["prune"]:
-        pruneModel(res18, train_dataset, val_dataset, test_dataset)
+        pruneModel(res18, train_dataset, test_dataset, test_dataset)
+
+    if flags["stats"]:
+        print("\n\nConv layers sparsity:")
+        print_conv2d_sparsity(res18)
+
+        print("\n\nLayers with weight:")
+        print_trainable_layers(res18)
+
+        print("\n\nModel Architecture:")
+        print_model_architecture(res18)
 
 
 main()

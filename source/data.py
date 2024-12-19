@@ -3,7 +3,14 @@ import tensorflow_addons as tfa
 import numpy as np
 
 
-def c10(batch_size=128, buffer_size=50000, num_classes=10, validation_split=0.15):
+def c10(
+    batch_size=128,
+    buffer_size=50000,
+    num_classes=10,
+    validation_split=0.15,
+    augment=True,
+    valid_split=True,
+):
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
 
     # Normalize to [0, 1]
@@ -15,7 +22,7 @@ def c10(batch_size=128, buffer_size=50000, num_classes=10, validation_split=0.15
 
     # Split training data into train and validation
     total_train_samples = x_train.shape[0]
-    val_size = int(total_train_samples * validation_split)
+    val_size = int(total_train_samples * validation_split) if valid_split == True else 1
 
     x_val, y_val = x_train[:val_size], y_train[:val_size]
     x_train, y_train = x_train[val_size:], y_train[val_size:]
@@ -32,12 +39,10 @@ def c10(batch_size=128, buffer_size=50000, num_classes=10, validation_split=0.15
 
     # Training dataset pipeline
     train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
-    train_dataset = (
-        train_dataset.shuffle(buffer_size)
-        .map(augment, num_parallel_calls=tf.data.AUTOTUNE)
-        .batch(batch_size)
-        .prefetch(tf.data.AUTOTUNE)
-    )
+    train_dataset = train_dataset.shuffle(buffer_size)
+    if augment == True:
+        train_dataset = train_dataset.map(augment, num_parallel_calls=tf.data.AUTOTUNE)
+    train_dataset = train_dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
     # Validation dataset pipeline
     val_dataset = tf.data.Dataset.from_tensor_slices((x_val, y_val))

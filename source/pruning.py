@@ -40,7 +40,7 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
         self.final_pruning_target = pruning_target
         self.current_sparsity = initSparsity
 
-        self.pruning_targets = self._gen_pruning_targets(pruning_target)
+        self.pruning_targets = self._gen_pruning_targets(pruning_target, num_points=20)
         self.target_index = 0
         for i, target in enumerate(self.pruning_targets):
             print(f"target {i+1}: {target}")
@@ -52,12 +52,14 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
         self.lr_reduce_factor = 0.5
         self.lr_scheduler = None
 
-        self.masks = [
-            tf.Variable(tf.ones_like(weight), trainable=False)
-            for layer in self.model.layers
-            if isinstance(layer, tf.keras.layers.Conv2D)
-            for weight in layer.trainable_weights
-        ]
+        self.masks = []
+        for layer in model.layers:
+            if isinstance(layer, tf.keras.layers.Conv2D):
+                self.masks.append(
+                    tf.Variable(
+                        tf.ones_like(layer.trainable_weights[0]), trainable=False
+                    )
+                )
 
         self.path = path
 
@@ -72,7 +74,7 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
 
             # Find the index of the smallest pruning target larger than initSparsity
             self.target_index = find_index_of_smallest_larger(
-                self.pruning_targets, initSparsity
+                self.pruning_targets, (initSparsity + 0.01)
             )
 
             # Ensure the index is valid
@@ -87,7 +89,7 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
     def _gen_pruning_targets(
         self, final_pruning_target, initial_target=0.25, num_points=10, power=2
     ):
-        normalized_points = np.linspace(0, 1, num_points) ** power
+        normalized_points = np.linspace(0, 1, num_points) ** (1 / power)
         targets = (
             initial_target + (final_pruning_target - initial_target) * normalized_points
         )
@@ -108,8 +110,8 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
         conv_weights = []
         for layer in self.model.layers:
             if isinstance(layer, tf.keras.layers.Conv2D):
-                for weight in layer.trainable_weights:
-                    conv_weights.append(tf.reshape(weight, [-1]))  # Flatten weights
+                weight = layer.trainable_weights[0]
+                conv_weights.append(tf.reshape(weight, [-1]))  # Flatten weights
 
         if not conv_weights:
             raise ValueError("No Conv2D layers found in the model.")
@@ -118,7 +120,14 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
 
         # Compute the global threshold
         sorted_weights = tf.sort(tf.abs(all_weights))
-        k = tf.cast(tf.size(sorted_weights) * target_ratio, tf.int32) - 1
+        k = (
+            tf.cast(
+                tf.cast(tf.size(sorted_weights), tf.float32)
+                * tf.constant(target_ratio, dtype=tf.float32),
+                tf.int32,
+            )
+            - 1
+        )
         global_threshold = sorted_weights[k] if k >= 0 else 0
 
         if global_threshold == 0:
@@ -130,12 +139,10 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
         conv_weight_index = 0
         for layer in self.model.layers:
             if isinstance(layer, tf.keras.layers.Conv2D):
-                for weight in layer.trainable_weights:
-                    new_mask = tf.cast(tf.abs(weight) >= global_threshold, weight.dtype)
-                    self.masks[conv_weight_index].assign(
-                        new_mask
-                    )  # Update mask in place
-                    conv_weight_index += 1
+                weight = layer.trainable_weights[0]
+                new_mask = tf.cast(tf.abs(weight) >= global_threshold, weight.dtype)
+                self.masks[conv_weight_index].assign(new_mask)
+                conv_weight_index += 1
 
     def _prune_weights(self):
         """
@@ -144,10 +151,11 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
         conv_weight_index = 0
         for layer in self.model.layers:
             if isinstance(layer, tf.keras.layers.Conv2D):
-                for weight in layer.trainable_weights:
-                    pruned_weights = weight * self.masks[conv_weight_index]
-                    weight.assign(pruned_weights)
-                    conv_weight_index += 1
+                pruned_weights = (
+                    layer.trainable_weights[0] * self.masks[conv_weight_index]
+                )
+                layer.trainable_weights[0].assign(pruned_weights)
+                conv_weight_index += 1
 
     def on_batch_end(self, batch, logs=None):
         target_ratio = self.pruning_targets[self.target_index]
@@ -209,7 +217,6 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
                 print(
                     f"New target index: {self.target_index}. Target ratio: {self.pruning_targets[self.target_index]}"
                 )
-
         else:
             self.epoch_counter += 1
             if self.epoch_counter >= self.patience:
@@ -221,6 +228,7 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
                 print(
                     f"Accuracy not recovered after {self.patience} epochs. Reducing learning rate to {new_lr:.7f}"
                 )
+                self.epoch_counter = 0
             else:
                 print(
                     f"Accuracy not recovered. Waiting for {self.patience - self.epoch_counter} more epochs before reducing LR."
@@ -246,3 +254,31 @@ class MagnitudePruning(tf.keras.callbacks.Callback):
             if next_target_sparsity is not None
             else " - No further pruning targets."
         )
+
+
+def print_conv2d_sparsity(model):
+    print("\nSparsity of Conv2D layers:\n")
+    for layer in model.layers:
+        if isinstance(layer, tf.keras.layers.Conv2D):
+            weights = layer.get_weights()
+            if weights:
+                kernel = weights[0]  # First element is the kernel
+                total_weights = np.prod(kernel.shape)
+                zero_weights = np.sum(kernel == 0)
+                sparsity = zero_weights / total_weights * 100
+                print(f"Layer {layer.name}: {sparsity:.2f}% sparsity")
+            else:
+                print(f"Layer {layer.name} has no weights.")
+
+
+def print_trainable_layers(model):
+    print("\nTrainable layers with weights and their shapes:\n")
+    for layer in model.layers:
+        if layer.trainable and layer.weights:
+            for weight in layer.weights:
+                print(f"Layer {layer.name}: {weight.name}, Shape: {weight.shape}")
+
+
+def print_model_architecture(model):
+    print("\nModel architecture:\n")
+    model.summary()
